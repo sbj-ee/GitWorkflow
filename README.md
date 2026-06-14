@@ -11,8 +11,9 @@ between a **rebase** and a **fast-forward**.
 1. [Core Principles](#core-principles)
 2. [Branching](#branching)
 3. [Pull Requests](#pull-requests)
-4. [Rebase vs. Fast-Forward](#rebase-vs-fast-forward)
-5. [Quick Reference](#quick-reference)
+4. [Protecting `main`](#protecting-main)
+5. [Rebase vs. Fast-Forward](#rebase-vs-fast-forward)
+6. [Quick Reference](#quick-reference)
 
 ---
 
@@ -128,6 +129,110 @@ Users currently have no way to authenticate. Closes #42.
 | **Squash & merge** | All PR commits collapse into one        | Most feature work — keeps `main` clean |
 | **Rebase & merge** | Commits replayed onto `main`, no merge commit | Preserving a curated commit-by-commit history |
 | **Merge commit**   | Explicit merge commit ties the branch in | Long-lived branches where you want the merge recorded |
+
+---
+
+## Protecting `main`
+
+Protecting `main` means making it *impossible* (or at least hard) to push broken
+or unreviewed code straight to it. There are two complementary layers: a
+**server-side** layer enforced by GitHub, and a **local** layer enforced on your
+own machine.
+
+### Layer 1 — Server-side: GitHub branch protection / rulesets
+
+GitHub can enforce rules on `main` for everyone who pushes. The recommended
+mechanism is a **ruleset** (the modern replacement for "classic" branch
+protection). Useful rules include:
+
+| Rule | Effect |
+| --- | --- |
+| Require a pull request before merging | No direct pushes; changes arrive via PR |
+| Require approvals | PR needs *N* reviews before it can merge |
+| Dismiss stale approvals on push | New commits re-open review |
+| Require status checks (CI) to pass | Tests must be green before merge |
+| Require linear history | Forbids merge commits (squash/rebase only) |
+| Block force pushes (`non_fast_forward`) | Nobody can rewrite `main`'s history |
+| Restrict deletions | `main` cannot be deleted |
+| Include administrators | Rules apply to admins too — no bypass |
+
+Create a ruleset from the command line with the GitHub CLI:
+
+```bash
+gh api -X POST repos/<owner>/<repo>/rulesets --input ruleset.json
+```
+
+```json
+{
+  "name": "protect-main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/main"], "exclude": [] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "required_linear_history" },
+    { "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 1,
+        "dismiss_stale_reviews_on_push": true,
+        "allowed_merge_methods": ["squash", "rebase"]
+      }
+    }
+  ]
+}
+```
+
+> ⚠️ **Plan requirement:** branch protection and rulesets on a **private**
+> repository require **GitHub Pro/Team/Enterprise**. On a free personal account a
+> private repo's ruleset request is rejected with *"Upgrade to GitHub Pro or make
+> this repository public."* Branch protection is free on **public** repos.
+> If you can't enable the server-side layer, rely on Layer 2 below.
+
+### Layer 2 — Local: a `pre-push` hook
+
+A Git hook runs on *your* machine and can refuse a push before it ever leaves
+your computer. This works on any plan, including free private repos — the
+trade-off is that it only protects clones where the hook is installed, and it can
+be bypassed with `--no-verify`. It's defense in depth, not a substitute for
+server-side rules.
+
+This repo ships such a hook at [`.githooks/pre-push`](./.githooks/pre-push). It
+blocks any push whose remote ref is `refs/heads/main`:
+
+```bash
+#!/usr/bin/env bash
+protected_branch="main"
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "refs/heads/$protected_branch" ]; then
+    echo "✋ Blocked: direct push to '$protected_branch' is not allowed." >&2
+    exit 1
+  fi
+done
+exit 0
+```
+
+Enable it (once per clone) by pointing Git at the tracked hooks directory:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Now `git push origin main` is rejected locally; you push a feature branch and
+open a PR instead. To intentionally bypass it (e.g. an initial setup commit):
+
+```bash
+git push --no-verify origin main
+```
+
+### Which layer should I use?
+
+- **Public repo, or private on a paid plan:** enable the **server-side ruleset** —
+  it's authoritative and applies to everyone. Add the local hook on top for fast,
+  offline feedback.
+- **Private repo on the free plan:** the server-side ruleset isn't available, so
+  the **local `pre-push` hook** is your main guard. Keep the habit of always
+  working on branches and merging via PR.
 
 ---
 
