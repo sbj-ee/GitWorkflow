@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# pre-commit shim — this repo sets core.hooksPath=.githooks (for the tracked
+# pre-push guard), so `pre-commit install` refuses to write .git/hooks/pre-commit.
+# This shim hands control to pre-commit the same way its own generated hook does,
+# but resolves the binary at runtime (portable across machines) and skips quietly
+# when pre-commit isn't installed instead of blocking the commit.
+#
+# See .pre-commit-config.yaml (gitleaks + detect-private-key secret scanning).
+
+ARGS=(hook-impl --config=.pre-commit-config.yaml --hook-type=pre-commit)
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ARGS+=(--hook-dir "$HERE" -- "$@")
+
+if command -v pre-commit > /dev/null 2>&1; then
+    exec pre-commit "${ARGS[@]}"
+elif command -v python3 > /dev/null 2>&1 && python3 -c 'import pre_commit' 2>/dev/null; then
+    exec python3 -mpre_commit "${ARGS[@]}"
+else
+    echo 'pre-commit not installed; skipping hooks (run: pre-commit install)' 1>&2
+    exit 0
+fi
