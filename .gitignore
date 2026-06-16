@@ -9,3 +9,6 @@ venv/
 env/
 ENV/
 virtenv*/
+
+# Generated docs
+README.pdf
